@@ -1,0 +1,18 @@
+assets:
+  # ОФЗ-ПД 26212 (погашение 2028 г.)
+  - name: "ОФЗ 26212"
+    figi: "BBG00425VG07"
+    weight: 0.40
+
+  # Биржевой фонд Т-Банка (TPAY)
+  - name: "TPAY"
+    figi: "TCS00A108WX3"
+    weight: 0.25
+
+  - name: "TMOS@"
+    figi: "TCS60A101X76"
+    weight: 0.25
+
+  - name: "TGLD@"
+    figi: "TCS80A101X50"
+    weight: 0.10
