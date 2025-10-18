@@ -82,6 +82,27 @@ python main.py --config config.yml --rub-budget 10000
 python main.py --config config.yml --rub-budget 10000 --dry-run
 ```
 
+### Расписание и ежедневный запуск
+
+Бот теперь предполагает ежедневный запуск в фиксированное время (через cron/Systemd и т.п.) и сам решает, исполнять ли сделки сегодня.
+
+Правила:
+- В конфиге задаёте портфель, а день месяца указываете ключом `--day-of-month` (по умолчанию 5).
+- Если запланированный день выпадает на выходной, а флаг `--allow-weekend` не передан — сделки автоматически переносятся на ближайший понедельник.
+- Во все остальные дни бот просто завершает работу и пишет в лог статус `SKIPPED_NOT_SCHEDULED_TODAY(expected=YYYY-MM-DD)`.
+
+Пример ежедневного cron на 10:00:
+
+```bash
+0 10 * * * cd /path/to/dca_bot && python main.py --config config.yml --rub-budget 10000 --day-of-month 5
+```
+
+Чтобы разрешить сделки в выходные именно в запланированный день:
+
+```bash
+0 10 * * * cd /path/to/dca_bot && python main.py --config config.yml --rub-budget 10000 --day-of-month 5 --allow-weekend
+```
+
 ### Дополнительные параметры
 
 ```bash
@@ -92,7 +113,8 @@ python main.py \
   --fee-buf-bps 300 \
   --safe-rub-pct 0.97 \
   --wait-tradable-sec 60 \
-  --poll-sec 10
+  --poll-sec 10 \
+  --allow-weekend
 ```
 
 **Параметры:**
@@ -103,6 +125,8 @@ python main.py \
 - `--safe-rub-pct` — использовать только N% от доступных средств (по умолчанию 0.97 = 97%)
 - `--wait-tradable-sec` — ждать до N секунд пока инструмент станет торгуемым (по умолчанию 0)
 - `--poll-sec` — интервал проверки торгового статуса в секундах (по умолчанию 10)
+- `--allow-weekend` — разрешить размещать ордера в субботу/воскресенье. По умолчанию при запуске в выходные бот фиксирует отложенные сделки в CSV со статусом `DEFERRED_TO_MONDAY(<дата>)` и завершает работу без размещения ордеров.
+- `--day-of-month` — день месяца (1..28), в который бот должен исполнять сделки. Если выпадает на выходной и не указан `--allow-weekend`, сделки переносятся на ближайший понедельник. В остальные дни бот завершает работу со статусом `SKIPPED_NOT_SCHEDULED_TODAY`.
 
 ## Вспомогательные инструменты
 
@@ -314,11 +338,8 @@ python main.py --config config.yml --rub-budget 10000 --dry-run
 Для регулярного запуска можно использовать cron:
 
 ```bash
-# Каждый понедельник в 10:00
-0 10 * * 1 cd /path/to/dca_bot && python main.py --config config.yml --rub-budget 10000
-
-# Каждое 1 число месяца в 15:30
-30 15 1 * * cd /path/to/dca_bot && python main.py --config config.yml --rub-budget 50000
+# Ежедневно в 10:00 (бот сам решит исполнять ли сделки сегодня)
+0 10 * * * cd /path/to/dca_bot && python main.py --config config.yml --rub-budget 10000 --day-of-month 5
 ```
 
 ## Структура проекта

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
@@ -9,7 +8,7 @@ import time
 import datetime as dt
 from uuid import uuid4
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import yaml
 from dotenv import load_dotenv
@@ -29,11 +28,20 @@ CSV_LOG = "orders_log.csv"
 
 
 # ----------------------------- utils -----------------------------
+def money_to_decimal(v: MoneyValue) -> Decimal:
+    return Decimal(v.units) + (Decimal(v.nano) / Decimal(1_000_000_000))
+
+
 def dec(v: Quotation | MoneyValue | None, default: str = "0") -> Decimal:
     """Безопасное преобразование Quotation/MoneyValue -> Decimal."""
     if v is None:
         return Decimal(default)
-    return quotation_to_decimal(v)
+    # корректно обрабатываем как Quotation, так и MoneyValue
+    if isinstance(v, Quotation):
+        return quotation_to_decimal(v)
+    if isinstance(v, MoneyValue):
+        return money_to_decimal(v)
+    return Decimal(default)
 
 
 def ensure_csv(path: str):
@@ -107,7 +115,7 @@ def load_config(path: str) -> dict:
 
 
 # ----------------------------- market helpers -----------------------------
-def pick_account_id(client: Client, explicit: Optional[str]) -> str:
+def pick_account_id(client: Any, explicit: Optional[str]) -> str:
     """Реальный брокерский счёт (без песочницы)."""
     if explicit:
         return explicit
@@ -119,7 +127,7 @@ def pick_account_id(client: Client, explicit: Optional[str]) -> str:
     return accs[0].id
 
 
-def get_instrument_meta(client: Client, figi: str) -> dict:
+def get_instrument_meta(client: Any, figi: str) -> dict:
     """Мини‑карточка инструмента: лот, валюта, тип, UID, и (если доступны) nominal/aci для облигаций."""
     resp = client.instruments.get_instrument_by(
         id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
@@ -148,7 +156,7 @@ def get_instrument_meta(client: Client, figi: str) -> dict:
     }
 
 
-def fetch_last_prices(client: Client, figis: List[str]) -> Dict[str, Decimal]:
+def fetch_last_prices(client: Any, figis: List[str]) -> Dict[str, Decimal]:
     prices: Dict[str, Decimal] = {}
     resp = client.market_data.get_last_prices(figi=figis)
     for p in resp.last_prices:
@@ -159,13 +167,11 @@ def fetch_last_prices(client: Client, figis: List[str]) -> Dict[str, Decimal]:
     return prices
 
 
-def get_available_rub(client: Client, account_id: str) -> Decimal:
+def get_available_rub(client: Any, account_id: str) -> Decimal:
     """Доступные RUB = свободные - заблокированные."""
     pos = client.operations.get_positions(account_id=account_id)
-    rub_money = next(
-        (m for m in pos.money if m.currency.lower() == "rub"), None)
-    rub_blocked = next(
-        (m for m in pos.blocked if m.currency.lower() == "rub"), None)
+    rub_money = next((m for m in pos.money if m.currency.lower() == "rub"), None)
+    rub_blocked = next((m for m in pos.blocked if m.currency.lower() == "rub"), None)
     free_rub = dec(rub_money) if rub_money else Decimal(0)
     blocked_rub = dec(rub_blocked) if rub_blocked else Decimal(0)
     return free_rub - blocked_rub
@@ -191,6 +197,15 @@ def main():
         type=Decimal,
         required=True,
         help="Total RUB budget for this run, e.g. 10000",
+    )
+    parser.add_argument(
+        "--day-of-month",
+        type=int,
+        default=5,
+        help=(
+            "Day of month to execute DCA (1..28). "
+            "If falls on weekend and --allow-weekend is not set, trades move to the next Monday."
+        ),
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Simulation only, no real orders"
@@ -219,6 +234,11 @@ def main():
         default=10,
         help="Polling interval for trading status while waiting",
     )
+    parser.add_argument(
+        "--allow-weekend",
+        action="store_true",
+        help="Place orders on Saturday/Sunday as well (by default, weekend runs are deferred to next Monday)",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -231,6 +251,82 @@ def main():
     cfg = load_config(args.config)
     fee_buf = Decimal(args.fee_buf_bps) / Decimal(10000)
     safe_mul = Decimal(str(args.safe_rub_pct))
+
+    # ---------------- Daily scheduling ----------------
+    # Бот запускается КАЖДЫЙ день. Он должен исполнить сделки:
+    # - либо в запланированный день месяца (по умолчанию 5-е),
+    # - либо в ближайший понедельник, если запланированный день выпал на выходной,
+    # - иначе — завершить выполнение и зафиксировать в логах причину пропуска.
+    today = dt.date.today()
+    # Ограничим диапазон 1..28, чтобы не зависеть от длины месяца
+    scheduled_dom = args.day_of_month
+    if scheduled_dom < 1:
+        scheduled_dom = 1
+    if scheduled_dom > 28:
+        scheduled_dom = 28
+    scheduled_date = dt.date(today.year, today.month, scheduled_dom)
+
+    # Рассчитать эффективную дату исполнения с учётом переноса на понедельник
+    if scheduled_date.weekday() >= 5 and not args.allow_weekend:
+        # 5=суббота, 6=воскресенье -> перенос на ближайший понедельник
+        days_to_mon = (7 - scheduled_date.weekday()) % 7
+        if days_to_mon == 0:
+            days_to_mon = 1
+        effective_date = scheduled_date + dt.timedelta(days=days_to_mon)
+    else:
+        effective_date = scheduled_date
+
+    period_key = dt.datetime.now().strftime("%Y-%m")
+
+    # Если сегодня — запланированный день, но это выходной и торговать нельзя — фиксируем перенос
+    if (
+        today == scheduled_date
+        and scheduled_date.weekday() >= 5
+        and not args.allow_weekend
+    ):
+        insert_report_separator()
+        for asset in cfg["assets"]:
+            append_log(
+                period_key=period_key,
+                figi=asset.get("figi", ""),
+                ticker="",
+                name=asset.get("name", ""),
+                instrument_type="",
+                lots=0,
+                lot_size=0,
+                filled_price_per_share=Decimal(0),
+                cost_rub=Decimal(0),
+                status=f"DEFERRED_TO_MONDAY({effective_date.isoformat()})",
+                order_request_id="",
+            )
+        print(
+            f"Scheduled day is weekend (today={today.isoformat()}). Trades deferred to Monday {effective_date.isoformat()}.",
+            file=sys.stderr,
+        )
+        return
+
+    # Если сегодня не эффективная дата — просто фиксируем пропуск и выходим
+    if today != effective_date:
+        insert_report_separator()
+        # Сводная запись (по всем инструментам) — чтобы не раздувать CSV
+        append_log(
+            period_key=period_key,
+            figi="",
+            ticker="",
+            name="",
+            instrument_type="",
+            lots=0,
+            lot_size=0,
+            filled_price_per_share=Decimal(0),
+            cost_rub=Decimal(0),
+            status=f"SKIPPED_NOT_SCHEDULED_TODAY(expected={effective_date.isoformat()})",
+            order_request_id="",
+        )
+        print(
+            f"Not scheduled today (today={today.isoformat()}, expected={effective_date.isoformat()}).",
+            file=sys.stderr,
+        )
+        return
 
     with Client(token) as client:
         account_id = pick_account_id(client, explicit_account)
@@ -287,8 +383,7 @@ def main():
 
             # Полная стоимость 1 лота + буфер
             eff_lot_cost = (
-                price_per_share_effective *
-                Decimal(lot) * (Decimal(1) + fee_buf)
+                price_per_share_effective * Decimal(lot) * (Decimal(1) + fee_buf)
             ).quantize(Decimal("0.01"))
 
             # Первый расчёт лотов от аллокации
@@ -342,8 +437,10 @@ def main():
                     lot_size=lot,
                     filled_price_per_share=price_per_share_effective,
                     cost_rub=Decimal(0),
-                    status=f"SKIPPED_TRADING_UNAVAILABLE(api={api_ok},mkt={mkt_ok},lim={
-                        lim_ok},status={tr_stat},waited_s={waited})",
+                    status=(
+                        f"SKIPPED_TRADING_UNAVAILABLE(api={api_ok},mkt={mkt_ok},"
+                        f"lim={lim_ok},status={tr_stat},waited_s={waited})"
+                    ),
                     order_request_id="",
                 )
                 continue
@@ -406,11 +503,12 @@ def main():
                             cur_lots -= 1
                             attempts += 1
                             continue
-                        if (
-                            e.details == "30079"
-                        ):  # Instrument is not available for trading
-                            status = f"SKIPPED_TRADING_UNAVAILABLE(api={api_ok},mkt={mkt_ok},lim={
-                                lim_ok},status={tr_stat})"
+                        if e.details == "30079":
+                            # Instrument is not available for trading
+                            status = (
+                                f"SKIPPED_TRADING_UNAVAILABLE(api={api_ok},mkt={mkt_ok},"
+                                f"lim={lim_ok},status={tr_stat})"
+                            )
                             cur_lots = 0
                             break
                         import traceback
