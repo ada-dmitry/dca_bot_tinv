@@ -1,6 +1,7 @@
-from tinkoff.invest import Client
-from dotenv import load_dotenv
 import os
+
+from dotenv import load_dotenv
+from t_tech.invest import Client
 
 load_dotenv()
 TOKEN = os.getenv("TINKOFF_TOKEN")

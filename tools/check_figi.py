@@ -1,14 +1,14 @@
-# check_figi.py
-from dotenv import load_dotenv
-from tinkoff.invest import Client, InstrumentIdType
-from tinkoff.invest.utils import quotation_to_decimal
 import os
 import sys
 
-FIGI = ["BBG00425VG07", "BBG0073DLHS1"
-        # вставь сюда твои FIGI из config.yaml
-        # "BBG004730N88", ...
-        ]
+from dotenv import load_dotenv
+from t_tech.invest import Client, InstrumentIdType
+from t_tech.invest.utils import quotation_to_decimal
+
+FIGI = [
+    "BBG00425VG07",
+    "BBG0073DLHS1",
+]
 
 load_dotenv()
 token = os.environ.get("TINKOFF_TOKEN")
@@ -26,8 +26,7 @@ with Client(token) as client:
             print(f"{f}: NOT FOUND")
             continue
         print(
-            f"{f}: {inst.ticker} | {inst.name} | lot={
-                inst.lot} | curr={inst.currency}"
+            f"{f}: {inst.ticker} | {inst.name} | lot={inst.lot} | curr={inst.currency}"
         )
 
     # Проверка last price

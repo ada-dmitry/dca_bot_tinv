@@ -1,0 +1,11 @@
+[project]
+name = "dca-bot-tinv"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dotenv>=0.9.9",
+    "pyyaml>=6.0.3",
+    "t-tech-investments>=0.3.3",
+]

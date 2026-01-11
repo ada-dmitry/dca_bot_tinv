@@ -1,6 +1,3 @@
 PyYAML
-tinkoff_invest
 dotenv
-tinkoff
-tinkoff-invest
-tinkoff-investments
+t-tech-investments

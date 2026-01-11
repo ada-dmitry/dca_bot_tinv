@@ -2,27 +2,26 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime as dt
 import os
 import sys
 import time
-import datetime as dt
+from decimal import ROUND_DOWN, Decimal
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
-from decimal import Decimal, ROUND_DOWN
-from typing import Dict, List, Optional, Any
 
 import yaml
 from dotenv import load_dotenv
-from tinkoff.invest import (
+from t_tech.invest import (
     Client,
+    InstrumentIdType,
     MoneyValue,
-    Quotation,
     OrderDirection,
     OrderType,
-    InstrumentIdType,
+    Quotation,
 )
-from tinkoff.invest.utils import quotation_to_decimal
-from tinkoff.invest.exceptions import RequestError
-
+from t_tech.invest.exceptions import RequestError
+from t_tech.invest.utils import quotation_to_decimal
 
 CSV_LOG = "orders_log.csv"
 
