@@ -34,5 +34,4 @@ if [[ -n "$ALLOW_WEEKEND" ]]; then
 fi
 
 # Запуск
-# python3 main.py "${ARGS[@]}" >> ./logs/dca.log 2>&1
-echo $ARGS
+python3 main.py "${ARGS[@]}" >> ./logs/dca.log 2>&1
